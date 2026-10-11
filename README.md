@@ -27,6 +27,18 @@ npm run build
 node out/server.js        # speaks LSP over stdio
 ```
 
+## Test
+
+```bash
+npm test                  # builds, then runs test/e2e.js against a real minilang binary
+```
+
+The e2e test spawns the server over stdio and asserts the diagnostics it sends
+for syntax errors, undefined names, missing modules, circular requires, a clean
+file, and a missing toolchain binary. It also verifies that validating a dirty
+buffer never writes into the real source file (the server validates a staging
+copy and cleans up after itself).
+
 ## License
 
 MIT.

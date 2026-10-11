@@ -1,6 +1,6 @@
 {
   "name": "minilang-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Language Server (LSP) for the minilang language, wrapping the minilang toolchain",
   "license": "MIT",
   "publisher": "minilang",
@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc -p ./",
     "watch": "tsc -w -p ./",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test": "npm run build && node test/e2e.js"
   },
   "dependencies": {
     "vscode-languageserver": "^9.0.1",
