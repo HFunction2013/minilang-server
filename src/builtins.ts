@@ -9,6 +9,8 @@ export interface BuiltinDoc {
 }
 
 export const BUILTINS: BuiltinDoc[] = [
+  { name: 'print', signature: 'print(v)', detail: 'print no newline', doc: 'Print v (nil/int/string/array/opaque) without a trailing newline.' },
+  { name: 'println', signature: 'println(v)', detail: 'print with newline', doc: 'Print v followed by a newline.' },
   { name: 'len', signature: 'len(v)', detail: 'length', doc: 'Number of chars in a string or elements in an array.' },
   { name: 'charAt', signature: 'charAt(s, i)', detail: 'char code at index', doc: 'Byte value (0-255) at index i, or 0 when out of range.' },
   { name: 'substr', signature: 'substr(s, start, len)', detail: 'substring', doc: 'Up to len chars of s starting at start.' },
