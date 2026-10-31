@@ -48,6 +48,21 @@ export interface ModuleDoc {
   functions: BuiltinDoc[];
 }
 
+/** Doc for a user-declared native function (from `native func name(params);`
+ * in the edited file), as opposed to the C-bootstrap natives above. */
+export function makeNativeDoc(name: string, params: string): BuiltinDoc {
+  const p = params.trim();
+  return {
+    name,
+    signature: p ? `${name}(${p})` : `${name}()`,
+    detail: 'user C extension (native)',
+    doc: `User C extension declared in this file.\n` +
+      `Implement it in a C file linked with \`build -e <file>.mil ext.c\` as\n` +
+      `\`Value ml_native_${name}(Value ...)\` (base name, no module prefix),\n` +
+      `including \`minilang_runtime.h\` (in minilang-boot).`,
+  };
+}
+
 const fn = (name: string, signature: string, detail: string, doc: string): BuiltinDoc => ({ name, signature, detail, doc });
 
 export const MODULES: ModuleDoc[] = [

@@ -26,7 +26,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { findDoc, allCompletions } from './builtins';
+import { findDoc, allCompletions, makeNativeDoc, BuiltinDoc } from './builtins';
 
 const connection = createConnection(
   new StreamMessageReader(process.stdin),
@@ -36,6 +36,25 @@ const documents = new TextDocuments(TextDocument);
 
 let minilangPath = 'minilang';
 let workspaceFolder: string | undefined;
+
+// User C extensions: `native func name(params);` declared in the edited file.
+// These are real functions to the compiler but only exist as C at link time;
+// the LSP indexes them so hover/completion work and so the "not registered"
+// VM error (which appears when running without a linked extension) can be
+// reported against the declaration/call site.
+const USER_NATIVE_RE = /^\s*native\s+func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gm;
+
+/** Index every `native func` declaration in `text` by base name. */
+function userNativeDocs(text: string): Map<string, BuiltinDoc> {
+  const out = new Map<string, BuiltinDoc>();
+  USER_NATIVE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = USER_NATIVE_RE.exec(text))) {
+    const name = m[1];
+    if (!out.has(name)) out.set(name, makeNativeDoc(name, m[2]));
+  }
+  return out;
+}
 
 // Parse the toolchain's error output into LSP diagnostics.
 //   Parse error line 12: unexpected token
@@ -48,7 +67,8 @@ let workspaceFolder: string | undefined;
 const PARSE_LINE_RE = /Parse error line (\d+):\s*(.*)/g;
 const PARSE_NOLINE_RE = /^Parse error:\s*(.*)$/gm;
 const COMPILE_RE = /^Compile error:?\s*(.*)$/gm;
-const UNDEFINED_NAME_RE = /(?:undefined function|undefined var|undefined variable|has no exported function)\s+'([^']+)'/;
+const VM_ERROR_RE = /^VM error:\s*(.*)$/gm;
+const UNDEFINED_NAME_RE = /(?:undefined function|undefined var|undefined variable|has no exported function|native function)\s+'([^']+)'/;
 
 /** First line of the document mentioning `name` as a whole word, or -1. */
 function locateName(text: string, name: string): number {
@@ -95,6 +115,16 @@ function toDiagnostics(uri: string, stderr: string): Diagnostic[] {
   while ((m = COMPILE_RE.exec(stderr))) {
     diags.push(locatedDiagnostic(text, m[1].trim() || 'compile error'));
   }
+  VM_ERROR_RE.lastIndex = 0;
+  while ((m = VM_ERROR_RE.exec(stderr))) {
+    const msg = m[1].trim() || 'vm error';
+    // A declared-but-unlinked native function is expected when running via
+    // the C bootstrap VM without a linked extension; make that actionable.
+    const hint = /native function/i.test(msg)
+      ? `${msg} — link the C extension with \`build -e <file>.mil ext.c\` (or use the LLVM backend)`
+      : msg;
+    diags.push(locatedDiagnostic(text, hint));
+  }
   return diags;
 }
 
@@ -140,7 +170,15 @@ function validate(textDocument: TextDocument): void {
   }
 
   const cwd = sourcePath ? path.dirname(sourcePath) : workspaceFolder ?? process.cwd();
-  const res = spawnSync(minilangPath, ['run', staged], { cwd, encoding: 'utf8' });
+  // syslib resolves via $MINILANG_DIR (or the toolchain dir). In an editor
+  // session the toolchain usually inherits it from the shell; fall back to
+  // the workspace root when a repo layout (syslib/ beside the sources) is
+  // being edited and the variable is unset.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (!env.MINILANG_DIR && workspaceFolder && fs.existsSync(path.join(workspaceFolder, 'syslib'))) {
+    env.MINILANG_DIR = workspaceFolder;
+  }
+  const res = spawnSync(minilangPath, ['run', staged], { cwd, env, encoding: 'utf8' });
 
   // Make toolchain problems visible instead of silently sending nothing.
   if (res.error) {
@@ -206,13 +244,20 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   while (start > 0 && isWordChar(text[start - 1])) start--;
   while (end < text.length && isWordChar(text[end])) end++;
   const word = text.slice(start, end);
-  const d = findDoc(word);
+  // Builtin/syslib metadata first, then native funcs declared in this file.
+  const d = findDoc(word) ?? userNativeDocs(text).get(word);
   if (!d) return null;
   return { contents: { language: 'minilang', value: `\`${d.signature}\`\n\n${d.doc}` } };
 });
 
-connection.onCompletion((_params: TextDocumentPositionParams): CompletionItem[] => {
-  return allCompletions().map((c) => ({
+connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] => {
+  const doc = documents.get(params.textDocument.uri);
+  const userNatives = doc ? Array.from(userNativeDocs(doc.getText()).values()) : [];
+  const items: { label: string; doc: BuiltinDoc }[] = [
+    ...allCompletions(),
+    ...userNatives.map((d) => ({ label: d.name, doc: d })),
+  ];
+  return items.map((c) => ({
     label: c.label,
     kind: c.label.includes('.') ? CompletionItemKind.Module : CompletionItemKind.Function,
     detail: c.doc.detail,
