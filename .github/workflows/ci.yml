@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v4
+
+      - name: Checkout boot toolchain (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: HFunction2013/minilang-boot
+          path: minilang-boot
+
+      - name: Checkout compiler (syslib)
+        uses: actions/checkout@v4
+        with:
+          repository: HFunction2013/minilang-compiler
+          path: minilang-compiler
+
+      - name: Build boot (Unix)
+        if: runner.os != 'Windows'
+        working-directory: minilang-boot
+        run: make
+
+      - name: Build boot (Windows, MSVC)
+        if: runner.os == 'Windows'
+        working-directory: minilang-boot
+        shell: bash
+        run: cmake -B build && cmake --build build --config Release
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and run e2e (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          MINILANG_BOOT: ${{ github.workspace }}/minilang-boot
+          MINILANG_DIR: ${{ github.workspace }}/minilang-compiler
+          PATH: ${{ github.workspace }}/minilang-boot:${{ env.PATH }}
+        run: npm test
+
+      - name: Build and run e2e (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          MINILANG_BOOT: ${{ github.workspace }}/minilang-boot/build/Release
+          MINILANG_DIR: ${{ github.workspace }}/minilang-compiler
+          PATH: ${{ github.workspace }}/minilang-boot/build/Release:${{ env.PATH }}
+        run: npm test
