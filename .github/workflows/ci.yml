@@ -27,6 +27,7 @@ jobs:
         with:
           repository: HFunction2013/minilang-compiler
           path: minilang-compiler
+          submodules: true
 
       - name: Build boot (Unix)
         if: runner.os != 'Windows'
