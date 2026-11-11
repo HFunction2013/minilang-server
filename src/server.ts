@@ -22,13 +22,18 @@ import {
   TextDocumentPositionParams,
   InitializeResult,
   InitializeParams,
+  Location,
+  SignatureHelp,
+  SignatureInformation,
+  DocumentSymbol,
+  SymbolKind,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { findDoc, allCompletions, makeNativeDoc, BuiltinDoc } from './builtins';
+import { findDoc, allCompletions, makeNativeDoc, BuiltinDoc, parseUserDefs, userFuncSig } from './builtins';
 
 const connection = createConnection(
   new StreamMessageReader(process.stdin),
@@ -229,25 +234,28 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       textDocumentSync: 1,
       hoverProvider: true,
       completionProvider: { triggerCharacters: ['.'] },
+      definitionProvider: true,
+      signatureHelpProvider: { triggerCharacters: ['(', ','] },
+      documentSymbolProvider: true,
     },
   };
 });
 
 connection.onInitialized(() => {
-  connection.workspace.getWorkspaceFolders().then((folders) => {
+  connection.workspace.getWorkspaceFolders().then((folders: { uri: string }[] | null) => {
     workspaceFolder = folders && folders[0] ? folders[0].uri.replace(/^file:/, '') : undefined;
   });
 });
 
-connection.onDidChangeConfiguration((change) => {
+connection.onDidChangeConfiguration((change: { settings?: { minilang?: { path?: string } } }) => {
   const cfg = change.settings?.minilang;
   if (cfg) {
     if (cfg.path) minilangPath = cfg.path;
   }
 });
 
-documents.onDidChangeContent((e) => validate(e.document));
-documents.onDidOpen((e) => validate(e.document));
+documents.onDidChangeContent((e: { document: TextDocument }) => validate(e.document));
+documents.onDidOpen((e: { document: TextDocument }) => validate(e.document));
 
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
@@ -289,7 +297,184 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
     insertText: k.insertText,
     insertTextFormat: k.snippet ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
   }));
-  return [...fnItems, ...kwItems];
+  // User-declared functions and variables in this buffer.
+  const userItems: CompletionItem[] = [];
+  if (doc) {
+    const { funcs, vars } = parseUserDefs(doc.getText());
+    for (const f of funcs) {
+      userItems.push({
+        label: f.name,
+        kind: CompletionItemKind.Function,
+        detail: `user function (line ${f.line + 1})`,
+        documentation: { value: `\`${userFuncSig(f)}\``, kind: MarkupKind.Markdown },
+        insertText: f.name,
+      });
+    }
+    for (const v of vars) {
+      userItems.push({
+        label: v.name,
+        kind: CompletionItemKind.Variable,
+        detail: `user variable (line ${v.line + 1})`,
+        insertText: v.name,
+      });
+    }
+  }
+  return [...fnItems, ...userItems, ...kwItems];
+});
+
+// ---- Definition: jump to the declaration ----------------------------------
+
+connection.onDefinition((params: TextDocumentPositionParams): Location[] | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+  const isWordChar = (c: string) => /[A-Za-z0-9_.]/.test(c);
+  let start = offset, end = offset;
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  const word = text.slice(start, end);
+  if (!word) return null;
+
+  // 1) User declarations in this buffer.
+  const { funcs, vars } = parseUserDefs(text);
+  const nativeLines = userNativeDocs(text);
+  for (const f of funcs) {
+    if (f.name === word || word.endsWith(`.${f.name}`)) {
+      return [{ uri: doc.uri, range: {
+        start: { line: f.line, character: 0 },
+        end: { line: f.line, character: Number.MAX_SAFE_INTEGER } } }];
+    }
+  }
+  for (const v of vars) {
+    if (v.name === word) {
+      return [{ uri: doc.uri, range: {
+        start: { line: v.line, character: 0 },
+        end: { line: v.line, character: Number.MAX_SAFE_INTEGER } } }];
+    }
+  }
+  // 2) syslib modules: jump to syslib/<mod>.mil (and the declared function when
+  //    the word is module.func).
+  const modMatch = /^([a-z]\w*)\.(\w+)$/.exec(word);
+  if (modMatch && workspaceFolder) {
+    const syslibDir = path.join(workspaceFolder, 'syslib');
+    const modFile = path.join(syslibDir, `${modMatch[1]}.mil`);
+    if (fs.existsSync(modFile)) {
+      let line = 0;
+      try {
+        const src = fs.readFileSync(modFile, 'utf8');
+        const lines = src.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          if (new RegExp(`func\\s+${modMatch[2]}\\s*\\(`).test(lines[i])) { line = i; break; }
+        }
+      } catch { /* keep line 0 */ }
+      return [{ uri: `file://${modFile}`, range: {
+        start: { line, character: 0 }, end: { line, character: Number.MAX_SAFE_INTEGER } } }];
+    }
+  }
+  return null;
+});
+
+// ---- Signature help -------------------------------------------------------
+
+interface SigTarget {
+  label: string;
+  activeParam: number;
+}
+
+/** Walk backwards from the cursor to find the call `name(` being typed. */
+function findCallAt(text: string, offset: number): SigTarget | null {
+  let depth = 0;
+  let i = offset - 1;
+  let commaCount = -1;
+  while (i >= 0) {
+    const c = text[i];
+    if (c === ')') depth++;
+    else if (c === '(') {
+      if (depth === 0) {
+        // Found the opening paren of the call. Back up over the name.
+        let s = i;
+        while (s > 0 && /[A-Za-z0-9_.]/.test(text[s - 1])) s--;
+        const name = text.slice(s, i);
+        if (!name) return null;
+        return { label: name, activeParam: Math.max(0, commaCount) };
+      }
+      depth--;
+    } else if (c === ',' && depth === 0) {
+      commaCount++;
+    } else if (c === ';' || c === '{' || c === '}') {
+      break; // left the expression
+    }
+    i--;
+  }
+  return null;
+}
+
+connection.onSignatureHelp((params: TextDocumentPositionParams): SignatureHelp | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const target = findCallAt(text, doc.offsetAt(params.position));
+  if (!target) return null;
+  // Resolve the signature: builtin/native metadata, user native decl, user func.
+  let sig: string | null = null;
+  const d = findDoc(target.label);
+  if (d) sig = d.signature;
+  if (!sig) {
+    const un = userNativeDocs(text).get(target.label);
+    if (un) sig = un.signature;
+  }
+  if (!sig) {
+    const { funcs } = parseUserDefs(text);
+    for (const f of funcs) {
+      if (f.name === target.label) { sig = userFuncSig(f); break; }
+    }
+  }
+  if (!sig) return null;
+  const info: SignatureInformation = {
+    label: sig,
+    documentation: d ? { value: d.doc, kind: MarkupKind.Markdown } : undefined,
+  };
+  return { signatures: [info], activeSignature: 0, activeParameter: target.activeParam };
+});
+
+// ---- Document symbol outline ---------------------------------------------
+
+connection.onDocumentSymbol((params): DocumentSymbol[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  const text = doc.getText();
+  const { funcs, vars } = parseUserDefs(text);
+  const natives = userNativeDocs(text);
+  const out: DocumentSymbol[] = [];
+  for (const f of funcs) {
+    out.push({
+      name: f.name,
+      kind: SymbolKind.Function,
+      range: { start: { line: f.line, character: 0 }, end: { line: f.line, character: Number.MAX_SAFE_INTEGER } },
+      selectionRange: { start: { line: f.line, character: 0 }, end: { line: f.line, character: Number.MAX_SAFE_INTEGER } },
+    });
+  }
+  for (const v of vars) {
+    out.push({
+      name: v.name,
+      kind: SymbolKind.Variable,
+      range: { start: { line: v.line, character: 0 }, end: { line: v.line, character: Number.MAX_SAFE_INTEGER } },
+      selectionRange: { start: { line: v.line, character: 0 }, end: { line: v.line, character: Number.MAX_SAFE_INTEGER } },
+    });
+  }
+  for (const [name] of natives) {
+    const line = locateName(text, name);
+    if (line >= 0) {
+      out.push({
+        name: `${name} (native)`,
+        kind: SymbolKind.Event,
+        range: { start: { line, character: 0 }, end: { line, character: Number.MAX_SAFE_INTEGER } },
+        selectionRange: { start: { line, character: 0 }, end: { line, character: Number.MAX_SAFE_INTEGER } },
+      });
+    }
+  }
+  return out;
 });
 
 documents.listen(connection);

@@ -97,6 +97,69 @@ async function main() {
   await s.sleep(1200);
   check(fs.readFileSync(CASE, 'utf8') === 'ORIGINAL ON DISK\n',
     'real source file untouched by validation');
+
+  // ---- New language features: hover, completion, definition, signature, symbols ----
+  const FEAT =
+    'func myhelper(a, b) {\n' +
+    '  return a + b;\n' +
+    '}\n' +
+    'var g_x = 3;\n' +
+    'func main() {\n' +
+    '  println myhelper(1, 2);\n' +
+    '  return 0;\n' +
+    '}\n';
+  fs.writeFileSync(CASE, FEAT);
+  s.send({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
+    textDocument: { uri, languageId: 'minilang', version: 2, text: FEAT },
+  } });
+  await s.sleep(600);
+
+  const req = (id, method, params) => {
+    s.send({ jsonrpc: '2.0', id, method, params });
+    return new Promise((resolve) => {
+      const t = setInterval(() => {
+        const r = s.messages.find((m) => m.id === id);
+        if (r) { clearInterval(t); resolve(r); }
+      }, 50);
+    });
+  };
+
+  // Hover over "println" (line 5, col 2).
+  const hov = await req(100, 'textDocument/hover', {
+    textDocument: { uri }, position: { line: 5, character: 3 },
+  });
+  check(hov.result && /println\(v\)/.test(hov.result.contents.value),
+    'hover shows builtin signature', JSON.stringify(hov.result));
+
+  // Completion offers builtins and user symbols.
+  const comp = await req(101, 'textDocument/completion', {
+    textDocument: { uri }, position: { line: 5, character: 2 },
+  });
+  const labels = (comp.result || []).map((i) => i.label);
+  check(labels.includes('println') && labels.includes('myhelper') && labels.includes('g_x'),
+    'completion lists builtin + user funcs/vars', JSON.stringify(labels));
+
+  // Definition of myhelper at the call site (line 5, col 12) -> decl line 0.
+  const def = await req(102, 'textDocument/definition', {
+    textDocument: { uri }, position: { line: 5, character: 12 },
+  });
+  check(def.result && def.result[0] && def.result[0].range.start.line === 0,
+    'definition jumps to user func decl', JSON.stringify(def.result));
+
+  // Signature help inside the myhelper( call (cursor right after '(').
+  const sig = await req(103, 'textDocument/signatureHelp', {
+    textDocument: { uri }, position: { line: 5, character: 19 },
+  });
+  check(sig.result && sig.result.signatures &&
+        /myhelper\(a, b\)/.test(sig.result.signatures[0].label),
+    'signature help shows user func signature', JSON.stringify(sig.result));
+
+  // Document symbols list funcs/vars.
+  const syms = await req(104, 'textDocument/documentSymbol', { textDocument: { uri } });
+  const names = (syms.result || []).map((x) => x.name);
+  check(names.includes('main') && names.includes('myhelper') && names.includes('g_x'),
+    'document symbols outline funcs/vars', JSON.stringify(names));
+
   s.child.kill();
 
   // Missing binary: the server must say so instead of staying silent.

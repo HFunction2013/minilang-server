@@ -169,3 +169,46 @@ export function allCompletions(): { label: string; doc: BuiltinDoc }[] {
   for (const m of MODULES) for (const f of m.functions) out.push({ label: `${m.name}.${f.name}`, doc: f });
   return out;
 }
+
+// ---- User-defined declarations in the edited buffer ----------------------
+
+export interface UserFunc {
+  name: string;
+  params: string;
+  line: number; // 0-based
+}
+
+export interface UserVar {
+  name: string;
+  line: number;
+}
+
+const FUNC_RE = /^\s*func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gm;
+const VAR_RE = /^\s*var\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
+
+/** Index `func name(args)` and `var name =` declarations in `text`. */
+export function parseUserDefs(text: string): { funcs: UserFunc[]; vars: UserVar[] } {
+  const funcs: UserFunc[] = [];
+  const vars: UserVar[] = [];
+  const lines = text.split(/\r?\n/);
+  FUNC_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FUNC_RE.exec(text))) {
+    const line = text.slice(0, m.index).split(/\r?\n/).length - 1;
+    funcs.push({ name: m[1], params: m[2].trim(), line });
+  }
+  VAR_RE.lastIndex = 0;
+  while ((m = VAR_RE.exec(text))) {
+    const mm = m;
+    const line = text.slice(0, mm.index).split(/\r?\n/).length - 1;
+    // Skip `native func name();` lines (they match `func` but not var);
+    // dedupe repeated assignments of the same name by keeping the first.
+    if (!vars.some((v) => v.name === mm[1])) vars.push({ name: mm[1], line });
+  }
+  return { funcs, vars };
+}
+
+/** Signature string for a user function. */
+export function userFuncSig(f: UserFunc): string {
+  return f.params ? `${f.name}(${f.params})` : `${f.name}()`;
+}
