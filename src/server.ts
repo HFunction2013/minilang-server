@@ -27,6 +27,10 @@ import {
   SignatureInformation,
   DocumentSymbol,
   SymbolKind,
+  ReferenceParams,
+  RenameParams,
+  WorkspaceEdit,
+  TextEdit,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { spawnSync } from 'child_process';
@@ -237,6 +241,8 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       signatureHelpProvider: { triggerCharacters: ['(', ','] },
       documentSymbolProvider: true,
+      referencesProvider: true,
+      renameProvider: { prepareProvider: true },
     },
   };
 });
@@ -475,6 +481,78 @@ connection.onDocumentSymbol((params): DocumentSymbol[] => {
     }
   }
   return out;
+});
+
+// ---- References / rename: whole-word occurrences in the buffer ------------
+
+/** All whole-word occurrences of `word` in `text`, as [line, startCol, endCol]. */
+function findWordRanges(text: string, word: string): { line: number; start: number; end: number }[] {
+  const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${esc}\\b`, 'g');
+  const lines = text.split(/\r?\n/);
+  const out: { line: number; start: number; end: number }[] = [];
+  let lineStart = 0;
+  for (let i = 0; i < lines.length; i++) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(lines[i]))) {
+      out.push({ line: i, start: m.index, end: m.index + word.length });
+    }
+    lineStart += lines[i].length + 1;
+  }
+  return out;
+}
+
+connection.onReferences((params: ReferenceParams): Location[] | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+  const isWordChar = (c: string) => /[A-Za-z0-9_.]/.test(c);
+  let start = offset, end = offset;
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  const word = text.slice(start, end);
+  if (!/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)?$/.test(word)) return null;
+  const base = word.split('.').pop()!;
+  return findWordRanges(text, base).map((r) => ({
+    uri: doc.uri,
+    range: { start: { line: r.line, character: r.start }, end: { line: r.line, character: r.end } },
+  }));
+});
+
+connection.onPrepareRename((params: TextDocumentPositionParams) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+  const isWordChar = (c: string) => /[A-Za-z0-9_.]/.test(c);
+  let start = offset, end = offset;
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  const word = text.slice(start, end);
+  if (!/^[A-Za-z_]\w*$/.test(word)) return null;
+  const p = doc.positionAt(start);
+  return { start: p, end: doc.positionAt(end) };
+});
+
+connection.onRenameRequest((params: RenameParams): WorkspaceEdit | null => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+  const isWordChar = (c: string) => /[A-Za-z0-9_.]/.test(c);
+  let start = offset, end = offset;
+  while (start > 0 && isWordChar(text[start - 1])) start--;
+  while (end < text.length && isWordChar(text[end])) end++;
+  const word = text.slice(start, end);
+  const newName = params.newName;
+  if (!/^[A-Za-z_]\w*$/.test(word) || !/^[A-Za-z_]\w*$/.test(newName)) return null;
+  const edits: TextEdit[] = findWordRanges(text, word).map((r) => ({
+    range: { start: { line: r.line, character: r.start }, end: { line: r.line, character: r.end } },
+    newText: newName,
+  }));
+  return { changes: { [doc.uri]: edits } };
 });
 
 documents.listen(connection);

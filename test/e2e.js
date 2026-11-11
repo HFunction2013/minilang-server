@@ -160,6 +160,22 @@ async function main() {
   check(names.includes('main') && names.includes('myhelper') && names.includes('g_x'),
     'document symbols outline funcs/vars', JSON.stringify(names));
 
+  // References: all whole-word occurrences of myhelper.
+  const refs = await req(105, 'textDocument/references', {
+    textDocument: { uri }, position: { line: 5, character: 12 }, context: { includeDeclaration: true },
+  });
+  const refLines = ((refs.result) || []).map((l) => l.range.start.line);
+  check(refLines.length === 2 && refLines.includes(0) && refLines.includes(5),
+    'references find decl + call', JSON.stringify(refLines));
+
+  // Rename: myhelper -> myFunc rewrites both occurrences.
+  const ren = await req(106, 'textDocument/rename', {
+    textDocument: { uri }, position: { line: 5, character: 12 }, newName: 'myFunc',
+  });
+  const edits = (ren.result && ren.result.changes && ren.result.changes[uri]) || [];
+  check(edits.length === 2 && edits.every((e) => e.newText === 'myFunc'),
+    'rename rewrites all occurrences', JSON.stringify(edits));
+
   s.child.kill();
 
   // Missing binary: the server must say so instead of staying silent.
