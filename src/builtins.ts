@@ -59,9 +59,16 @@ export function makeNativeDoc(name: string, params: string): BuiltinDoc {
     signature: p ? `${name}(${p})` : `${name}()`,
     detail: 'user C extension (native)',
     doc: `User C extension declared in this file.\n` +
-      `Implement it in a C file linked with \`build -e <file>.mil ext.c\` as\n` +
-      `\`Value ml_native_${name}(Value ...)\` (base name, no module prefix),\n` +
-      `including \`minilang_runtime.h\` (in minilang-boot).`,
+      `Run it straight from source with the C boot VM:\n` +
+      `\`minilang run -e <file>.mil ext.c -- args\` (on Windows the .c sources,\n` +
+      `the generated ABI adapter and runtime.c are bundled into a %TEMP% DLL\n` +
+      `and loaded with LoadLibrary).\n` +
+      `Or link it into a native executable: \`minilang build -e <file>.mil ext.c\`\n` +
+      `(add \`--dynamic\` for a shared-library extension that can be hot-swapped).\n` +
+      `Implement it in C as \`Value ml_native_${name}(Value ...)\` (base name, no\n` +
+      `module prefix), including \`minilang_runtime.h\` (in minilang-boot).\n` +
+      `Wrap C pointers (FILE*, structs, ...) with \`ml_opaque_create\` /\n` +
+      `\`ml_opaque_ptr\` to expose them as OpaqueType handles to minilang.`,
   };
 }
 

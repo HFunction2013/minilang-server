@@ -17,6 +17,8 @@ import {
   Hover,
   CompletionItem,
   CompletionItemKind,
+  InsertTextFormat,
+  MarkupKind,
   TextDocumentPositionParams,
   InitializeResult,
   InitializeParams,
@@ -43,6 +45,19 @@ let workspaceFolder: string | undefined;
 // VM error (which appears when running without a linked extension) can be
 // reported against the declaration/call site.
 const USER_NATIVE_RE = /^\s*native\s+func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gm;
+
+/** Language keywords / declaration snippets offered on completion. */
+const KEYWORD_SNIPPETS: { label: string; detail: string; insertText: string; snippet: boolean }[] = [
+  { label: 'native func', detail: 'declare a C-implemented native function', insertText: 'native func ${1:name}(${2:args});', snippet: true },
+  { label: 'require ... from builtin', detail: 'import a C native (sqrt/abs/time/...)', insertText: 'require ${1:sqrt} from builtin;', snippet: true },
+  { label: 'require ... from', detail: 'import selected symbols from a syslib module', insertText: 'require ${1:cos} from ${2:math};', snippet: true },
+  { label: 'var', detail: 'declare a variable', insertText: 'var ${1:name} = ${2:0};', snippet: true },
+  { label: 'func', detail: 'define a function', insertText: 'func ${1:name}(${2:args}) {\n\t$0\n}', snippet: true },
+  { label: 'if', detail: 'conditional', insertText: 'if (${1:cond}) {\n\t$0\n}', snippet: true },
+  { label: 'while', detail: 'loop', insertText: 'while (${1:cond}) {\n\t$0\n}', snippet: true },
+  { label: 'return', detail: 'return from a function', insertText: 'return ${1:0};', snippet: true },
+  { label: 'break', detail: 'break out of a while loop', insertText: 'break;', snippet: false },
+];
 
 /** Index every `native func` declaration in `text` by base name. */
 function userNativeDocs(text: string): Map<string, BuiltinDoc> {
@@ -121,7 +136,9 @@ function toDiagnostics(uri: string, stderr: string): Diagnostic[] {
     // A declared-but-unlinked native function is expected when running via
     // the C bootstrap VM without a linked extension; make that actionable.
     const hint = /native function/i.test(msg)
-      ? `${msg} — link the C extension with \`build -e <file>.mil ext.c\` (or use the LLVM backend)`
+      ? `${msg} — run it with \`minilang run -e <file>.mil ext.c\` (boot VM loads the C ` +
+        `extension), or link it with \`build -e <file>.mil ext.c\`. The self-hosted ` +
+        `interpreter \`run main.mil\` cannot load extensions and reports this.`
       : msg;
     diags.push(locatedDiagnostic(text, hint));
   }
@@ -257,13 +274,22 @@ connection.onCompletion((params: TextDocumentPositionParams): CompletionItem[] =
     ...allCompletions(),
     ...userNatives.map((d) => ({ label: d.name, doc: d })),
   ];
-  return items.map((c) => ({
+  const fnItems = items.map((c): CompletionItem => ({
     label: c.label,
     kind: c.label.includes('.') ? CompletionItemKind.Module : CompletionItemKind.Function,
     detail: c.doc.detail,
-    documentation: { value: c.doc.doc, kind: 'markdown' },
+    documentation: { value: c.doc.doc, kind: MarkupKind.Markdown },
     insertText: c.label,
   }));
+  const kwItems: CompletionItem[] = KEYWORD_SNIPPETS.map((k) => ({
+    label: k.label,
+    kind: k.snippet ? CompletionItemKind.Snippet : CompletionItemKind.Keyword,
+    detail: k.detail,
+    documentation: { value: k.detail, kind: MarkupKind.Markdown },
+    insertText: k.insertText,
+    insertTextFormat: k.snippet ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
+  }));
+  return [...fnItems, ...kwItems];
 });
 
 documents.listen(connection);
