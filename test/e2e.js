@@ -180,7 +180,12 @@ async function main() {
   s.child.kill();
 
   // Missing binary: the server must say so instead of staying silent.
-  const s2 = startServer('/usr/bin:/bin');
+  // Missing binary: keep the node executable dir on PATH (the server itself
+  // is spawned as `node`), but drop the boot toolchain dir so `minilang`
+  // cannot be found.
+  const pathSep2 = process.platform === 'win32' ? ';' : ':';
+  const barePath = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(pathSep2);
+  const s2 = startServer(barePath);
   const uri2 = 'file://' + CASE;
   s2.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { capabilities: {} } });
   s2.send({ jsonrpc: '2.0', method: 'initialized', params: {} });
