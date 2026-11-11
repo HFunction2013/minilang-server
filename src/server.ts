@@ -136,9 +136,9 @@ function toDiagnostics(uri: string, stderr: string): Diagnostic[] {
     // A declared-but-unlinked native function is expected when running via
     // the C bootstrap VM without a linked extension; make that actionable.
     const hint = /native function/i.test(msg)
-      ? `${msg} — run it with \`minilang run -e <file>.mil ext.c\` (boot VM loads the C ` +
-        `extension), or link it with \`build -e <file>.mil ext.c\`. The self-hosted ` +
-        `interpreter \`run main.mil\` cannot load extensions and reports this.`
+      ? `${msg} — run it with \`minilang run -e <file>.mil ext.c\` (or the self-hosted ` +
+        `\`run main.mil run -e <file>.mil ext.c\`; both load the C extension), or link it ` +
+        `with \`build -e <file>.mil ext.c\`.`
       : msg;
     diags.push(locatedDiagnostic(text, hint));
   }
