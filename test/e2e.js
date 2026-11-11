@@ -17,8 +17,9 @@ const CASE = path.join(os.tmpdir(), 'minilang-lsp-e2e-case.mil');
 const STAGED = path.join(os.tmpdir(), '.minilang-lint-minilang-lsp-e2e-case.mil');
 
 function startServer(pathOverride) {
+  const pathSep = process.platform === 'win32' ? ';' : ':';
   const child = spawn('node', [SERVER], {
-    env: { ...process.env, PATH: pathOverride || `${BOOT}:${process.env.PATH}` },
+    env: { ...process.env, PATH: pathOverride || `${BOOT}${pathSep}${process.env.PATH}` },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let buf = Buffer.alloc(0);
