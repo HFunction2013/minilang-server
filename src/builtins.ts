@@ -59,12 +59,12 @@ export function makeNativeDoc(name: string, params: string): BuiltinDoc {
     signature: p ? `${name}(${p})` : `${name}()`,
     detail: 'user C extension (native)',
     doc: `User C extension declared in this file.\n` +
-      `Run it straight from source with the C boot VM:\n` +
-      `\`minilang run -e <file>.mil ext.c -- args\` (on Windows the .c sources,\n` +
-      `the generated ABI adapter and runtime.c are bundled into a %TEMP% DLL\n` +
-      `and loaded with LoadLibrary).\n` +
-      `Or link it into a native executable: \`minilang build -e <file>.mil ext.c\`\n` +
-      `(add \`--dynamic\` for a shared-library extension that can be hot-swapped).\n` +
+      `Precompile your C implementation yourself; the toolchain never compiles\n` +
+      `.c sources on the fly, so pass a prebuilt object / archive / shared library.\n` +
+      `Load a prebuilt shared library when interpreting:\n` +
+      `\`minilang run -e <file>.mil ext.so -- args\` (.dll on Windows).\n` +
+      `Or link a precompiled object/archive into a native executable:\n` +
+      `\`minilang build -e <file>.mil ext.o\`.\n` +
       `Implement it in C as \`Value ml_native_${name}(Value ...)\` (base name, no\n` +
       `module prefix), including \`minilang_runtime.h\` (in minilang-boot).\n` +
       `Wrap C pointers (FILE*, structs, ...) with \`ml_opaque_create\` /\n` +
