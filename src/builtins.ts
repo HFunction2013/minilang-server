@@ -67,6 +67,8 @@ export function makeNativeDoc(name: string, params: string): BuiltinDoc {
       `\`minilang build -e <file>.mil ext.o\`.\n` +
       `Implement it in C as \`Value ml_native_${name}(Value ...)\` (base name, no\n` +
       `module prefix), including \`minilang_runtime.h\` (in minilang-boot).\n` +
+      `Scaffold the header/stub with \`minilang genheader <file>.mil\`, then\n` +
+      `precompile the stub with \`minilang compileheader <file>.mil\`.\n` +
       `Wrap C pointers (FILE*, structs, ...) with \`ml_opaque_create\` /\n` +
       `\`ml_opaque_ptr\` to expose them as OpaqueType handles to minilang.`,
   };
