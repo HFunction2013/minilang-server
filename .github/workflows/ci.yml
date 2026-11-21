@@ -20,12 +20,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: HFunction2013/minilang-boot
+          ref: ${{ github.head_ref || github.ref_name }}
           path: minilang-boot
 
       - name: Checkout compiler (syslib)
         uses: actions/checkout@v4
         with:
           repository: HFunction2013/minilang-compiler
+          ref: ${{ github.head_ref || github.ref_name }}
           path: minilang-compiler
           submodules: true
 
